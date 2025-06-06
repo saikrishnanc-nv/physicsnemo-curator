@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+  - /variables: drivaerml
+  - _self_
+
+etl:
+  # Common settings used across components
+  common:
+    kind: drivaerml  # must be either drivesim, drivaerml or ahmedml
+    model_type: surface  # produce data for which model? surface, volume, combined
+
+  processing:
+    num_processes: 12
+    serialization_method: zarr
+    compression:
+    args: {}
+
+  validator:
+    _target_: physicsnemo_curator.examples.external_aerodynamics.domino.dataset_validator.DoMINODatasetValidator
+    _convert_: all
+
+    validation_level: "fields"  # One of "structure" or "fields"
+
+  source:
+    _target_: physicsnemo_curator.examples.external_aerodynamics.domino.data_sources.DoMINODataSource
+    _convert_: all
+
+    input_dir: ???  # Path to input dataset directory (required)
+    kind: ${etl.common.kind}
+    model_type: ${etl.common.model_type}
+
+    decimation:
+      algo: decimate_pro  # can be one of {decimate_pro, decimate}
+      reduction: 0.0  # 0 means no decimation.
+      preserve_topology: false
+
+  transformations:
+    # User can choose which transformations to use, for example,
+    # DoMINOZarrTransformation or DoMINONumpyTransformation.
+    # NOTE: This should match the Sink class' serialization method.
+    zarr:
+      _target_: physicsnemo_curator.examples.external_aerodynamics.domino.data_transformations.DoMINOZarrTransformation
+      _convert_: all
+      compression_method: "zstd"
+      compression_level: 5
+      chunk_size_mb: 1.0
+    # numpy:
+    #   _target_: physicsnemo_curator.examples.external_aerodynamics.domino.data_transformations.DoMINONumpyTransformation
+    #   _convert_: all
+
+  sink:
+    _target_: physicsnemo_curator.examples.external_aerodynamics.domino.data_sources.DoMINODataSource
+    _convert_: all
+
+    output_dir: ???  # Path to output directory (required)
+    kind: ${etl.common.kind}
+    # "zarr" or "numpy". NOTE: This should match the Transformation class' output format.
+    serialization_method: "zarr"
+    overwrite_existing: true

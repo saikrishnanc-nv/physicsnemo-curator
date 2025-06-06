@@ -1,0 +1,7 @@
+*pycache*
+*outputs*
+*egg-info*
+*venv*
+.coverage*
+.pytest_cache*
+.ruff_cache*

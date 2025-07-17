@@ -50,6 +50,7 @@ lint.ignore = ["E501", "S311"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "test/*.py" = ["S101"]
+"tests/ci_tests/header_check.py" = ["S603", "S607"]
 
 [tool.pytest.ini_options]
 addopts = "-v --cov=physicsnemo_curator --cov-report=term-missing"

@@ -57,7 +57,7 @@ pre-commit install
 
 ### New to PhysicsNeMo-Curator?
 
-If you're new to the framework, start with our comprehensive [**Tutorial**](./TUTORIAL.md).
+If you're new to the framework, start with our comprehensive [**Tutorial**](./examples/tutorials/etl_hdf5_to_zarr/hdf5_to_zarr.ipynb).
 It walks you through building a complete ETL pipeline from scratch. You'll learn how to:
 
 - Define data schemas
@@ -82,6 +82,7 @@ PhysicsNeMo-Curator can process your data through the following approaches:
 1. Organize your converted data according to one of the [supported dataset formats](examples/external_aerodynamics/domino/DoMINO_Data_Processing_Reference.md#input-data-structure)
 2. Use the built-in [DoMINO pipeline](examples/external_aerodynamics/domino/README.md)
 to convert your data to an AI model training ready format
+3. Train your DoMINO Model on your own data by following the [example in PhysicsNeMo](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/external_aerodynamics/domino)!
 
 #### Option 2: Extend the Framework for Custom Formats
 

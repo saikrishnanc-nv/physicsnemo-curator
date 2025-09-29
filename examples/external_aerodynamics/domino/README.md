@@ -38,25 +38,6 @@ This high-fidelity, open-source (CC-BY-SA) public dataset is specifically design
 It comprises 500 parametrically morphed variants of the widely utilized DrivAer notchback generic vehicle.
 For more technical details about this dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
-### Option 1: Download from AWS S3
-
-**NOTE** Before running the AWS script, please follow these instructions on [Getting Started with the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html).
-
-Download the DrivAer ML dataset using the provided [download_aws_dataset.sh](./download_aws_dataset.sh) script:
-
-```bash
-# Download a few runs (1-5) to default directory
-./download_aws_dataset.sh
-
-# Download specific runs to a custom directory
-./download_aws_dataset.sh -d ./my_data -s 1 -e 5
-
-# Get help
-./download_aws_dataset.sh --help
-```
-
-### Option 2: Download from Hugging Face
-
 Download the DrivAer ML dataset using the provided [download_hugging_face_dataset.sh](./download_hugging_face_dataset.sh) script:
 
 ```bash
@@ -71,7 +52,7 @@ Download the DrivAer ML dataset using the provided [download_hugging_face_datase
 ```
 
 **Note**: The default for both options downloads a subset of runs (1-5),
-while the full version in both AWS and Hugging Face contain 500 runs.
+while the full version contain 500 runs.
 
 ## Running the Curator
 

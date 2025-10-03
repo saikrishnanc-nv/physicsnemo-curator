@@ -14,19 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import warnings
-from typing import Any, Optional
+from typing import Callable, Optional
 
 import numpy as np
-import pyvista as pv
-import vtk
 from numcodecs import Blosc
 
+from examples.external_aerodynamics.external_aero_geometry_data_processors import (
+    default_geometry_processing_for_external_aerodynamics,
+)
+from examples.external_aerodynamics.external_aero_surface_data_processors import (
+    default_surface_processing_for_external_aerodynamics,
+)
+from examples.external_aerodynamics.external_aero_volume_data_processors import (
+    default_volume_processing_for_external_aerodynamics,
+)
 from physicsnemo_curator.etl.data_transformations import DataTransformation
 from physicsnemo_curator.etl.processing_config import ProcessingConfig
 
 from .constants import PhysicsConstants
-from .external_aero_utils import decimate_mesh, get_volume_data, to_float32
+from .external_aero_utils import (
+    to_float32,
+)
 from .schemas import (
     ExternalAerodynamicsExtractedDataInMemory,
     ExternalAerodynamicsNumpyDataInMemory,
@@ -78,174 +88,139 @@ class ExternalAerodynamicsNumpyTransformation(DataTransformation):
         )
 
 
-class ExternalAerodynamicsPreprocessingTransformation(DataTransformation):
-    """General preprocessing of data for External Aerodynamics model."""
+class ExternalAerodynamicsSTLTransformation(DataTransformation):
+    """Transforms STL data for External Aerodynamics model."""
 
-    DECIMATION_ALGOS: tuple[str, ...] = ("decimate_pro", "decimate")
+    def __init__(
+        self,
+        cfg: ProcessingConfig,
+        geometry_processors: Optional[tuple[Callable, ...]] = None,
+    ):
+        super().__init__(cfg)
+        self.geometry_processors = geometry_processors
+        self.logger = logging.getLogger(__name__)
+
+    def transform(
+        self, data: ExternalAerodynamicsExtractedDataInMemory
+    ) -> ExternalAerodynamicsExtractedDataInMemory:
+        """Transform STL data for External Aerodynamics model."""
+
+        # Regardless of whether there are any additional geometry processors,
+        # we always apply the default geometry processing.
+        # This will ensure that the bare minimum criteria for geometry data is met.
+        # That is - The geometry data (vertices, faces, areas and centers) are present.
+        data = default_geometry_processing_for_external_aerodynamics(data)
+
+        if self.geometry_processors is not None:
+            for processor in self.geometry_processors:
+                data = processor(data)
+
+        # Delete raw STL data to save memory
+        data.stl_polydata = None
+
+        return data
+
+
+class ExternalAerodynamicsSurfaceTransformation(DataTransformation):
+    """Transforms surface data for External Aerodynamics model."""
 
     def __init__(
         self,
         cfg: ProcessingConfig,
         surface_variables: Optional[dict[str, str]] = None,
-        volume_variables: Optional[dict[str, str]] = None,
-        decimation: Optional[dict[str, Any]] = None,
+        surface_processors: Optional[tuple[Callable, ...]] = None,
     ):
         super().__init__(cfg)
+        self.logger = logging.getLogger(__name__)
 
         self.surface_variables = surface_variables
-        self.volume_variables = volume_variables
-
-        self.decimation_algo = None
-        self.target_reduction = None
-        if decimation is not None:
-            self.decimation_algo = decimation.get("algo")
-            if self.decimation_algo not in self.DECIMATION_ALGOS:
-                raise ValueError(
-                    f"Unsupported decimation algo {self.decimation_algo}, must be one of {', '.join(self.DECIMATION_ALGOS)}"
-                )
-            self.target_reduction = decimation.get("reduction", 0.0)
-            if not 0 <= self.target_reduction < 1.0:
-                raise ValueError(
-                    f"Expected value in [0, 1), got {self.target_reduction}"
-                )
-            # Copy decimation dict, excluding 'algo' and 'reduction'
-            self.decimation_kwargs = {
-                k: v for k, v in decimation.items() if k not in ("algo", "reduction")
-            }
-
+        self.surface_processors = surface_processors
         self.constants = PhysicsConstants()
+
+        if surface_variables is None:
+            self.logger.error("Surface variables are empty!")
+            raise ValueError("Surface variables are empty!")
+
+        self.logger.info(
+            f"Initializing ExternalAerodynamicsSurfaceTransformation with surface_variables: {surface_variables} and surface_processors: {surface_processors}"
+        )
+        self.logger.info(
+            "This will only be processed if the model_type is surface/combined."
+        )
 
     def transform(
         self, data: ExternalAerodynamicsExtractedDataInMemory
     ) -> ExternalAerodynamicsExtractedDataInMemory:
-        """Transform data for preprocessing."""
-
-        # Process STL data
-        mesh_stl = data.stl_polydata
-        stl_vertices = mesh_stl.points
-        stl_faces = (
-            np.array(mesh_stl.faces).reshape((-1, 4))[:, 1:].astype(np.int32)
-        )  # Assuming triangular elements
-        mesh_indices_flattened = stl_faces.flatten()
-        stl_sizes = mesh_stl.compute_cell_sizes(length=False, area=True, volume=False)
-        stl_sizes = np.array(stl_sizes.cell_data["Area"])
-        stl_centers = np.array(mesh_stl.cell_centers().points)
-
-        # Delete raw STL data to save memory
-        data.stl_polydata = None
-
-        # Update processed STL data
-        data.stl_coordinates = to_float32(stl_vertices)
-        data.stl_centers = to_float32(stl_centers)
-        data.stl_faces = mesh_indices_flattened
-        data.stl_areas = to_float32(stl_sizes)
-
-        # Update metadata
-        bounds = mesh_stl.bounds
-        data.metadata.x_bound = bounds[0:2]  # xmin, xmax
-        data.metadata.y_bound = bounds[2:4]  # ymin, ymax
-        data.metadata.z_bound = bounds[4:6]  # zmin, zmax
-        data.metadata.num_points = len(mesh_stl.points)
-        data.metadata.num_faces = len(mesh_indices_flattened)
-        data.metadata.stream_velocity = self.constants.STREAM_VELOCITY
-        data.metadata.air_density = self.constants.AIR_DENSITY
-
-        # Load volume data if needed
-        if data.volume_unstructured_grid is not None:
-            # Process volume data
-            length_scale = np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0))
-            volume_coordinates, volume_fields = self._process_volume_data(
-                data.volume_unstructured_grid, length_scale
-            )
-
-            # Delete raw volume data to save memory
-            data.volume_unstructured_grid = None
-
-            # Update processed volume data
-            data.volume_mesh_centers = to_float32(volume_coordinates)
-            data.volume_fields = to_float32(volume_fields)
+        """Transform surface data for External Aerodynamics model."""
 
         if data.surface_polydata is not None:
 
-            # Process surface data
-            (
-                surface_coordinates,
-                surface_normals,
-                surface_sizes,
-                surface_fields,
-            ) = self._process_surface_data(data.surface_polydata)
+            # Regardless of whether there are any additional surface processors,
+            # we always apply the default surface processing.
+            # This will ensure that the bare minimum criteria for surface data is met.
+            # That is - The surface data (mesh centers, normals, areas and fields) are present.
+            data = default_surface_processing_for_external_aerodynamics(
+                data, self.surface_variables
+            )
+
+            if self.surface_processors is not None:
+                for processor in self.surface_processors:
+                    data = processor(data)
 
             # Delete raw surface data to save memory
             data.surface_polydata = None
 
-            # Update processed surface data
-            data.surface_mesh_centers = to_float32(surface_coordinates)
-            data.surface_normals = to_float32(surface_normals)
-            data.surface_areas = to_float32(surface_sizes)
-            data.surface_fields = to_float32(surface_fields)
-
-            # Update metadata
-            data.metadata.decimation_algo = self.decimation_algo
-            data.metadata.decimation_reduction = self.target_reduction
-
         return data
 
-    def _process_volume_data(
-        self, unstructured_grid: vtk.vtkUnstructuredGrid, length_scale: float
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Process volume mesh data."""
 
-        volume_coordinates, volume_fields = get_volume_data(
-            unstructured_grid, self.volume_variables
-        )
-        volume_fields = np.concatenate(volume_fields, axis=-1)
+class ExternalAerodynamicsVolumeTransformation(DataTransformation):
+    """Transforms volume data for External Aerodynamics model."""
 
-        # Non-dimensionalize volume fields
-        volume_fields[:, :3] = volume_fields[:, :3] / self.constants.STREAM_VELOCITY
-        volume_fields[:, 3:4] = volume_fields[:, 3:4] / (
-            self.constants.AIR_DENSITY * self.constants.STREAM_VELOCITY**2.0
-        )
-        volume_fields[:, 4:] = volume_fields[:, 4:] / (
-            self.constants.STREAM_VELOCITY * length_scale
-        )
-
-        return volume_coordinates, volume_fields
-
-    def _process_surface_data(
+    def __init__(
         self,
-        mesh: pv.PolyData,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Process surface mesh data."""
+        cfg: ProcessingConfig,
+        volume_variables: Optional[dict[str, str]] = None,
+        volume_processors: Optional[tuple[Callable, ...]] = None,
+    ):
+        super().__init__(cfg)
+        self.volume_variables = volume_variables
+        self.volume_processors = volume_processors
+        self.constants = PhysicsConstants()
+        self.logger = logging.getLogger(__name__)
 
-        # Decimate mesh if needed.
-        if self.decimation_algo is not None and self.target_reduction > 0:
-            mesh = decimate_mesh(
-                mesh,
-                self.decimation_algo,
-                self.target_reduction,
-                self.decimation_kwargs,
+        if volume_variables is None:
+            self.logger.error("Volume variables are empty!")
+            raise ValueError("Volume variables are empty!")
+
+        self.logger.info(
+            f"Initializing ExternalAerodynamicsVolumeTransformation with volume_variables: {volume_variables} and volume_processors: {volume_processors}"
+        )
+        self.logger.info(
+            "This will only be processed if the model_type is volume/combined."
+        )
+
+    def transform(
+        self, data: ExternalAerodynamicsExtractedDataInMemory
+    ) -> ExternalAerodynamicsExtractedDataInMemory:
+
+        if data.volume_unstructured_grid is not None:
+
+            # Regardless of whether there are any additional volume processors,
+            # we always apply the default volume processing.
+            # This will ensure that the bare minimum criteria for volume data is met.
+            # That is - The volume data (mesh centers and fields) are present.
+            data = default_volume_processing_for_external_aerodynamics(
+                data, self.volume_variables
             )
 
-        cell_data = (mesh.cell_data[k] for k in self.surface_variables)
-        surface_fields = np.concatenate(
-            [d if d.ndim > 1 else d[:, np.newaxis] for d in cell_data], axis=-1
-        )
-        surface_coordinates = np.array(mesh.cell_centers().points)
-        surface_normals = np.array(mesh.cell_normals)
-        surface_sizes = mesh.compute_cell_sizes(length=False, area=True, volume=False)
-        surface_sizes = np.array(surface_sizes.cell_data["Area"])
+            if self.volume_processors is not None:
+                for processor in self.volume_processors:
+                    data = processor(data)
 
-        # Normalize cell normals
-        surface_normals = (
-            surface_normals / np.linalg.norm(surface_normals, axis=1)[:, np.newaxis]
-        )
+            # Delete raw volume data to save memory
+            data.volume_unstructured_grid = None
 
-        # Non-dimensionalize surface fields
-        surface_fields = surface_fields / (
-            self.constants.AIR_DENSITY * self.constants.STREAM_VELOCITY**2.0
-        )
-
-        return surface_coordinates, surface_normals, surface_sizes, surface_fields
+        return data
 
 
 class ExternalAerodynamicsZarrTransformation(DataTransformation):

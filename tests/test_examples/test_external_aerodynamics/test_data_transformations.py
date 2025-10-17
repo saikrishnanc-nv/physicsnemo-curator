@@ -36,9 +36,11 @@ from examples.external_aerodynamics.data_transformations import (
     ExternalAerodynamicsZarrTransformation,
 )
 from examples.external_aerodynamics.external_aero_geometry_data_processors import (
+    filter_geometry_invalid_faces,
     update_geometry_data_to_float32,
 )
 from examples.external_aerodynamics.external_aero_surface_data_processors import (
+    filter_invalid_surface_cells,
     non_dimensionalize_surface_fields,
     normalize_surface_normals,
     update_surface_data_to_float32,
@@ -467,6 +469,77 @@ class TestExternalAerodynamicsSTLTransformation:
         assert result.stl_faces.dtype == np.int32  # This should remain int32
         assert result.stl_areas.dtype == np.float32
 
+    def test_transform_with_default_processor_and_filter_invalid_geometry_faces(
+        self, sample_data_raw
+    ):
+        """Test STL transformation with filter invalid geometry faces on top of the default processor."""
+        # Start with sample_data_raw which has 1 valid triangle with 3 vertices
+        stl_polydata = sample_data_raw.stl_polydata
+
+        # Get existing points and faces
+        stl_points = stl_polydata.points  # Shape: (3, 3) - 3 vertices
+        stl_faces = stl_polydata.faces  # [3, 0, 1, 2] - 1 triangle
+
+        # Add 3 collinear points for a degenerate triangle (zero area)
+        # These points lie on a line, so they won't form a valid triangle
+        additional_points = np.array(
+            [
+                [2.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],  # All on x-axis -> collinear
+            ],
+            dtype=np.float64,
+        )
+        updated_points = np.vstack([stl_points, additional_points])
+
+        # Add the degenerate triangle face
+        # Format: [num_vertices, vertex_idx_0, vertex_idx_1, vertex_idx_2]
+        updated_faces = np.concatenate(
+            [
+                stl_faces,  # Original valid triangle: [3, 0, 1, 2]
+                np.array([3, 3, 4, 5], dtype=np.int32),  # Degenerate triangle
+            ]
+        )
+
+        # Create new polydata with updated geometry
+        sample_data_raw.stl_polydata = pv.PolyData(updated_points, faces=updated_faces)
+
+        config = ProcessingConfig(num_processes=1)
+        transform = ExternalAerodynamicsSTLTransformation(
+            config, geometry_processors=(filter_geometry_invalid_faces,)
+        )
+        result = transform.transform(sample_data_raw)
+
+        # Check that the invalid geometry face was filtered out
+        # We started with 2 faces (1 valid + 1 invalid), should have 1 valid face after filtering
+        assert (
+            result.metadata.num_faces == 3
+        ), "Should have 3 face indices (1 triangle) after filtering"
+        assert len(result.stl_areas) == 1, "Should have 1 area value after filtering"
+        assert len(result.stl_centers) == 1, "Should have 1 center after filtering"
+
+        # The remaining face should have valid area (> 0)
+        assert np.all(result.stl_areas > 0), "Remaining area should be positive"
+
+        # Check that unused vertices were removed
+        # Original: 6 vertices (3 valid + 3 for degenerate triangle)
+        # After filtering: only 3 vertices (from the valid triangle) should remain
+        assert result.metadata.num_points == 3, "Should have 3 vertices after filtering"
+        assert len(result.stl_coordinates) == 3, "Should have 3 coordinate sets"
+
+        # Check that face indices were reindexed correctly (should be [0, 1, 2])
+        assert len(result.stl_faces) == 3, "Should have 3 face indices"
+        np.testing.assert_array_equal(
+            np.sort(result.stl_faces),
+            np.array([0, 1, 2]),
+            err_msg="Face indices should be reindexed to [0, 1, 2]",
+        )
+
+        # Check that bounds were updated correctly
+        assert result.metadata.x_bound is not None
+        assert result.metadata.y_bound is not None
+        assert result.metadata.z_bound is not None
+
 
 class TestExternalAerodynamicsSurfaceTransformation:
     """Test the ExternalAerodynamicsSurfaceTransformation class."""
@@ -627,6 +700,83 @@ class TestExternalAerodynamicsSurfaceTransformation:
         )
         expected = np.array([[1.0, 0.5, 0.2, 101325.0]]) / dynamic_pressure_factor
         np.testing.assert_allclose(result.surface_fields, expected, rtol=1e-5)
+
+    def test_transform_with_default_processor_and_filter_invalid_surface_cells(
+        self, sample_data_raw
+    ):
+        """Test surface transformation with filter invalid surface cells on top of the default processor."""
+        # Start with sample_data_raw which has 1 valid triangle
+        surface_polydata = sample_data_raw.surface_polydata
+
+        # Get existing points and faces
+        surface_points = surface_polydata.points  # Shape: (3, 3) - 3 points
+        surface_faces = surface_polydata.faces  # [3, 0, 1, 2] - 1 triangle
+
+        # Add 3 collinear points for a degenerate triangle (zero area, zero normal)
+        # These points lie on a line, so they won't form a valid triangle
+        additional_points = np.array(
+            [
+                [2.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],  # All on x-axis -> collinear
+            ],
+            dtype=np.float64,
+        )
+        updated_points = np.vstack([surface_points, additional_points])
+
+        # Add the degenerate triangle face
+        # Format: [num_vertices, vertex_idx_0, vertex_idx_1, vertex_idx_2]
+        updated_faces = np.concatenate(
+            [
+                surface_faces,  # Original valid triangle: [3, 0, 1, 2]
+                np.array([3, 3, 4, 5], dtype=np.int32),  # Degenerate triangle
+            ]
+        )
+
+        # Create new polydata with updated geometry
+        sample_data_raw.surface_polydata = pv.PolyData(
+            updated_points, faces=updated_faces
+        )
+
+        # Update cell data fields for 2 cells (1 valid + 1 invalid)
+        sample_data_raw.surface_polydata["pMeanTrim"] = np.array(
+            [101325.0, 101330.0], dtype=np.float64
+        )
+        sample_data_raw.surface_polydata["wallShearStressMeanTrim"] = np.array(
+            [[1.0, 0.5, 0.2], [1.1, 0.6, 0.3]], dtype=np.float64
+        )
+
+        config = ProcessingConfig(num_processes=1)
+        transform = ExternalAerodynamicsSurfaceTransformation(
+            config,
+            surface_variables={
+                "wallShearStressMeanTrim": "vector",
+                "pMeanTrim": "scalar",
+            },
+            surface_processors=(filter_invalid_surface_cells,),
+        )
+        result = transform.transform(sample_data_raw)
+
+        # Check that the invalid surface cell was filtered out
+        # We started with 2 cells (1 valid + 1 invalid), should have 1 valid cell after filtering
+        assert (
+            result.surface_mesh_centers.shape[0] == 1
+        ), "Should have 1 cell after filtering"
+        assert result.surface_normals.shape[0] == 1
+        assert result.surface_areas.shape[0] == 1
+        assert result.surface_fields.shape[0] == 1
+
+        # The remaining cell should have valid area (> 0)
+        assert np.all(result.surface_areas > 0), "Remaining area should be positive"
+
+        # The remaining normal should have non-zero magnitude
+        normal_magnitudes = np.linalg.norm(result.surface_normals, axis=1)
+        assert np.all(
+            normal_magnitudes > 1e-6
+        ), "Remaining normal should have non-zero magnitude"
+
+        # Verify the fields dimension is correct (3 components for vector + 1 for scalar)
+        assert result.surface_fields.shape[1] == 4, "Should have 4 field components"
 
 
 class TestExternalAerodynamicsVolumeTransformation:

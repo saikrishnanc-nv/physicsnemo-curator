@@ -53,6 +53,80 @@ def default_surface_processing_for_external_aerodynamics(
     return data
 
 
+def filter_invalid_surface_cells(
+    data: ExternalAerodynamicsExtractedDataInMemory,
+    tolerance: float = 1e-6,
+) -> ExternalAerodynamicsExtractedDataInMemory:
+    """
+    Filter out invalid surface cells based on area and normal criteria.
+
+    Removes cells where:
+    - Area is <= tolerance (zero or negative area)
+    - Normal vector has L2-norm <= tolerance (degenerate normal)
+
+    Args:
+        data: External aerodynamics data with surface information
+        tolerance: Minimum valid value for area and normal magnitude (default: 1e-6)
+
+    Returns:
+        Data with invalid cells filtered out
+    """
+
+    if data.surface_areas is None or len(data.surface_areas) == 0:
+        logger.warning("Surface areas are empty, skipping filter")
+        return data
+
+    if data.surface_normals is None or len(data.surface_normals) == 0:
+        logger.warning("Surface normals are empty, skipping filter")
+        return data
+
+    # Calculate initial count
+    n_total = len(data.surface_areas)
+
+    # Create validity masks
+    valid_area_mask = data.surface_areas > tolerance
+    normal_norms = np.linalg.norm(data.surface_normals, axis=1)
+    valid_normal_mask = normal_norms > tolerance
+
+    # Combine masks (both conditions must be true)
+    valid_mask = valid_area_mask & valid_normal_mask
+
+    # Count filtered cells
+    n_valid = valid_mask.sum()
+    n_filtered = n_total - n_valid
+    n_area_filtered = (~valid_area_mask).sum()
+    n_normal_filtered = (~valid_normal_mask).sum()
+
+    # Log filtering statistics
+    if n_filtered == 0:
+        logger.info(f"No invalid surface cells found (all {n_total} cells are valid)")
+        return data
+
+    if n_valid == 0:
+        logger.error(
+            f"All {n_total} surface cells filtered out! "
+            f"({n_area_filtered} due to area, {n_normal_filtered} due to normals). "
+            "Check tolerance and data quality."
+        )
+        raise ValueError("Filtering removed all surface cells")
+
+    logger.info(
+        f"Filtered {n_filtered} invalid surface cells "
+        f"({n_filtered/n_total*100:.2f}% of {n_total} total cells):"
+    )
+    logger.info(f"  - {n_area_filtered} cells with area <= {tolerance}")
+    logger.info(f"  - {n_normal_filtered} cells with normal L2-norm <= {tolerance}")
+    logger.info(f"  - {n_valid} valid cells remaining")
+
+    # Apply filter to all surface arrays
+    data.surface_mesh_centers = data.surface_mesh_centers[valid_mask]
+    data.surface_normals = data.surface_normals[valid_mask]
+    data.surface_areas = data.surface_areas[valid_mask]
+    data.surface_fields = data.surface_fields[valid_mask]
+
+    return data
+
+
 def normalize_surface_normals(
     data: ExternalAerodynamicsExtractedDataInMemory,
 ) -> ExternalAerodynamicsExtractedDataInMemory:

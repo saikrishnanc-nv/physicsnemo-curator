@@ -46,6 +46,7 @@ from examples.external_aerodynamics.external_aero_surface_data_processors import
     update_surface_data_to_float32,
 )
 from examples.external_aerodynamics.external_aero_volume_data_processors import (
+    filter_volume_invalid_cells,
     non_dimensionalize_volume_fields,
     shuffle_volume_data,
     update_volume_data_to_float32,
@@ -979,6 +980,59 @@ class TestExternalAerodynamicsVolumeTransformation:
             np.testing.assert_allclose(
                 shuffled_field, original_fields[original_idx], rtol=1e-10
             )
+
+    def test_transform_with_default_processor_and_filter_invalid_volume_cells(
+        self, sample_data_raw
+    ):
+        """Test volume transformation with filter invalid volume cells on top of the default processor."""
+        config = ProcessingConfig(num_processes=1)
+
+        # First, process the volume data using the default processor
+        transform_process = ExternalAerodynamicsVolumeTransformation(
+            config,
+            volume_variables={
+                "UMeanTrim": "vector",
+                "pMeanTrim": "scalar",
+            },
+        )
+        processed_data = transform_process.transform(sample_data_raw)
+
+        # Now inject some invalid data into the processed volume data
+        # Original has 4 valid volume cells
+        n_original = len(processed_data.volume_mesh_centers)
+
+        # Add 2 cells: 1 with NaN in coordinates, 1 with inf in fields
+        invalid_center_nan = np.array([[np.nan, 0.5, 0.5]])
+        invalid_field_nan = np.array([[10.0, 0.0, 0.0, 101000.0]])
+
+        invalid_center_inf = np.array([[0.5, 0.5, 0.5]])
+        invalid_field_inf = np.array([[np.inf, 0.0, 0.0, 101000.0]])
+
+        # Concatenate invalid data
+        processed_data.volume_mesh_centers = np.vstack(
+            [processed_data.volume_mesh_centers, invalid_center_nan, invalid_center_inf]
+        )
+        processed_data.volume_fields = np.vstack(
+            [processed_data.volume_fields, invalid_field_nan, invalid_field_inf]
+        )
+
+        # Now apply the filter
+        result = filter_volume_invalid_cells(processed_data)
+
+        # Check that the invalid volume cells were filtered out
+        # We started with 4 valid + 2 invalid = 6 cells, should have 4 valid cells after filtering
+        assert (
+            result.volume_mesh_centers.shape[0] == n_original
+        ), f"Should have {n_original} cells after filtering"
+        assert result.volume_fields.shape[0] == n_original
+
+        # All remaining cells should have finite coordinates
+        assert np.all(
+            np.isfinite(result.volume_mesh_centers)
+        ), "All coordinates should be finite"
+
+        # All remaining cells should have finite fields
+        assert np.all(np.isfinite(result.volume_fields)), "All fields should be finite"
 
     def test_transform_with_default_processor_and_shuffle_data_large_array(self):
         """Test shuffling with a larger array to ensure efficiency."""

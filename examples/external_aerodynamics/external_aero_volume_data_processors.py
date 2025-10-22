@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 import numpy as np
 
 from examples.external_aerodynamics.constants import PhysicsConstants
@@ -25,6 +27,13 @@ from examples.external_aerodynamics.schemas import (
     ExternalAerodynamicsExtractedDataInMemory,
 )
 
+logging.basicConfig(
+    format="%(asctime)s - Process %(process)d - %(levelname)s - %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
 
 def default_volume_processing_for_external_aerodynamics(
     data: ExternalAerodynamicsExtractedDataInMemory,
@@ -35,6 +44,78 @@ def default_volume_processing_for_external_aerodynamics(
         data.volume_unstructured_grid, volume_variables
     )
     data.volume_fields = np.concatenate(data.volume_fields, axis=-1)
+    return data
+
+
+def filter_volume_invalid_cells(
+    data: ExternalAerodynamicsExtractedDataInMemory,
+) -> ExternalAerodynamicsExtractedDataInMemory:
+    """
+    Filter out invalid volume cells based on NaN and inf criteria.
+
+    Removes cells where:
+    - Coordinates contain NaN values
+    - Field values contain NaN or inf values
+
+    Args:
+        data: External aerodynamics data with volume information
+
+    Returns:
+        Data with invalid cells filtered out
+    """
+
+    if data.volume_mesh_centers is None or len(data.volume_mesh_centers) == 0:
+        logger.warning("Volume mesh centers are empty, skipping volume filter")
+        return data
+
+    if data.volume_fields is None or len(data.volume_fields) == 0:
+        logger.warning("Volume fields are empty, skipping volume filter")
+        return data
+
+    # Calculate initial count
+    n_total = len(data.volume_mesh_centers)
+
+    # Create validity masks
+    # Check for NaN in coordinates (any NaN in any dimension makes the cell invalid)
+    valid_coords_mask = ~np.any(np.isnan(data.volume_mesh_centers), axis=1)
+
+    # Check for NaN/inf in fields (any non-finite value makes the cell invalid)
+    valid_fields_mask = np.all(np.isfinite(data.volume_fields), axis=1)
+
+    # Combine masks (both conditions must be true)
+    valid_mask = valid_coords_mask & valid_fields_mask
+
+    # Count filtered cells
+    n_valid = valid_mask.sum()
+    n_filtered = n_total - n_valid
+    n_coords_filtered = (~valid_coords_mask).sum()
+    n_fields_filtered = (~valid_fields_mask).sum()
+
+    # Log filtering statistics
+    if n_filtered == 0:
+        logger.info(f"No invalid volume cells found (all {n_total} cells are valid)")
+        return data
+
+    if n_valid == 0:
+        logger.error(
+            f"All {n_total} volume cells filtered out! "
+            f"({n_coords_filtered} due to NaN coords, {n_fields_filtered} due to NaN/inf fields). "
+            "Check data quality."
+        )
+        raise ValueError("Filtering removed all volume cells")
+
+    logger.info(
+        f"Filtered {n_filtered} invalid volume cells "
+        f"({n_filtered/n_total*100:.2f}% of {n_total} total cells):"
+    )
+    logger.info(f"  - {n_coords_filtered} cells with NaN in coordinates")
+    logger.info(f"  - {n_fields_filtered} cells with NaN/inf in fields")
+    logger.info(f"  - {n_valid} valid cells remaining")
+
+    # Apply filter to all volume arrays
+    data.volume_mesh_centers = data.volume_mesh_centers[valid_mask]
+    data.volume_fields = data.volume_fields[valid_mask]
+
     return data
 
 

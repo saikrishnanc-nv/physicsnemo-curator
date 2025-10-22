@@ -44,12 +44,14 @@ from examples.external_aerodynamics.external_aero_surface_data_processors import
     non_dimensionalize_surface_fields,
     normalize_surface_normals,
     update_surface_data_to_float32,
+    validate_surface_sample_quality,
 )
 from examples.external_aerodynamics.external_aero_volume_data_processors import (
     filter_volume_invalid_cells,
     non_dimensionalize_volume_fields,
     shuffle_volume_data,
     update_volume_data_to_float32,
+    validate_volume_sample_quality,
 )
 from examples.external_aerodynamics.schemas import (
     ExternalAerodynamicsExtractedDataInMemory,
@@ -779,6 +781,75 @@ class TestExternalAerodynamicsSurfaceTransformation:
         # Verify the fields dimension is correct (3 components for vector + 1 for scalar)
         assert result.surface_fields.shape[1] == 4, "Should have 4 field components"
 
+    def test_validate_surface_sample_quality_with_valid_data(self, sample_data_raw):
+        """Test surface sample quality validator with valid data."""
+        config = ProcessingConfig(num_processes=1)
+
+        # First process and non-dimensionalize the data
+        transform = ExternalAerodynamicsSurfaceTransformation(
+            config,
+            surface_variables={
+                "wallShearStressMeanTrim": "vector",
+                "pMeanTrim": "scalar",
+            },
+            surface_processors=(
+                partial(
+                    non_dimensionalize_surface_fields,
+                    air_density=sample_data_raw.metadata.air_density,
+                    stream_velocity=sample_data_raw.metadata.stream_velocity,
+                ),
+            ),
+        )
+        processed_data = transform.transform(sample_data_raw)
+
+        # Apply validator - should pass with reasonable data
+        result = validate_surface_sample_quality(
+            processed_data,
+            statistical_tolerance=7.0,
+            pressure_max=4.0,
+        )
+
+        # Should return unchanged data
+        assert result.surface_fields is not None
+        np.testing.assert_array_equal(
+            result.surface_fields, processed_data.surface_fields
+        )
+
+    def test_validate_surface_sample_quality_with_extreme_values(self):
+        """Test surface sample quality validator with data exceeding bounds."""
+        # Create data with extreme pressure values that will exceed threshold
+        metadata = ExternalAerodynamicsMetadata(
+            filename="test_extreme",
+            dataset_type=ModelType.SURFACE,
+            stream_velocity=30.0,
+            air_density=1.205,
+        )
+
+        data = ExternalAerodynamicsExtractedDataInMemory(metadata=metadata)
+
+        # Create surface fields with extreme values (after non-dimensionalization)
+        # Pressure is first component, make it exceed 4.0
+        data.surface_fields = np.array(
+            [
+                [5.0, 1.0, 0.5],  # Pressure = 5.0 > 4.0 (exceeds threshold)
+                [5.5, 1.2, 0.6],
+                [6.0, 1.1, 0.4],
+            ]
+        )
+        data.surface_mesh_centers = np.random.rand(3, 3)
+        data.surface_normals = np.random.rand(3, 3)
+        data.surface_areas = np.random.rand(3)
+
+        # Apply validator - should detect bounds violation and return None
+        result = validate_surface_sample_quality(
+            data,
+            statistical_tolerance=7.0,
+            pressure_max=4.0,
+        )
+
+        # Sample should be rejected (returns None)
+        assert result is None
+
 
 class TestExternalAerodynamicsVolumeTransformation:
     """Test the ExternalAerodynamicsVolumeTransformation class."""
@@ -1033,6 +1104,115 @@ class TestExternalAerodynamicsVolumeTransformation:
 
         # All remaining cells should have finite fields
         assert np.all(np.isfinite(result.volume_fields)), "All fields should be finite"
+
+    def test_transform_with_default_processor_and_validate_volume_sample_quality_with_valid_data(
+        self, sample_data_raw
+    ):
+        """Test volume sample quality validator with valid data."""
+        config = ProcessingConfig(num_processes=1)
+
+        # First process and non-dimensionalize the data
+        transform = ExternalAerodynamicsVolumeTransformation(
+            config,
+            volume_variables={
+                "UMeanTrim": "vector",
+                "pMeanTrim": "scalar",
+            },
+            volume_processors=(
+                partial(
+                    non_dimensionalize_volume_fields,
+                    air_density=sample_data_raw.metadata.air_density,
+                    stream_velocity=sample_data_raw.metadata.stream_velocity,
+                ),
+            ),
+        )
+        processed_data = transform.transform(sample_data_raw)
+
+        # Apply validator - should pass with reasonable data
+        # Note: Using higher pressure_max since sample data has absolute pressure values
+        # that non-dimensionalize to ~93 (atmospheric pressure / dynamic pressure)
+        result = validate_volume_sample_quality(
+            processed_data,
+            statistical_tolerance=7.0,
+            velocity_max=3.5,
+            pressure_max=100.0,  # Higher threshold for test with absolute pressure
+        )
+
+        # Should return unchanged data
+        assert result is not None
+        assert result.volume_fields is not None
+        np.testing.assert_array_equal(
+            result.volume_fields, processed_data.volume_fields
+        )
+
+    def test_transform_with_default_processor_and_validate_volume_sample_quality_with_outliers_velocity(
+        self,
+    ):
+        """Test volume sample quality validator with outliers in velocity values."""
+        # Create data with outliers in velocity values
+        metadata = ExternalAerodynamicsMetadata(
+            filename="test_outliers_velocity",
+            dataset_type=ModelType.VOLUME,
+            stream_velocity=30.0,
+            air_density=1.205,
+        )
+
+        data = ExternalAerodynamicsExtractedDataInMemory(metadata=metadata)
+
+        # Create volume fields with outliers in velocity values (after non-dimensionalization)
+        # Fields are [u, v, w, p, ...], make velocity exceed 3.5
+        data.volume_fields = np.array(
+            [
+                [4.0, 2.0, 2.0, 2.0],  # u = 4.0 > 3.5 (exceeds threshold)
+                [3.8, 2.5, 2.2, 2.5],  # u = 3.8 > 3.5 (exceeds threshold)
+                [4.2, 1.8, 2.3, 2.3],  # u = 4.2 > 3.5 (exceeds threshold)
+            ]
+        )
+        data.volume_mesh_centers = np.random.rand(3, 3)
+
+        # Apply validator - should detect bounds violation and return None
+        result = validate_volume_sample_quality(
+            data,
+            statistical_tolerance=7.0,
+            velocity_max=3.5,
+            pressure_max=4.0,
+        )
+
+        # Sample should be rejected (returns None)
+        assert result is None
+
+    def test_validate_volume_sample_quality_with_extreme_pressure(self):
+        """Test volume sample quality validator with extreme pressure values."""
+        # Create data with extreme pressure values
+        metadata = ExternalAerodynamicsMetadata(
+            filename="test_extreme",
+            dataset_type=ModelType.VOLUME,
+            stream_velocity=30.0,
+            air_density=1.205,
+        )
+
+        data = ExternalAerodynamicsExtractedDataInMemory(metadata=metadata)
+
+        # Create volume fields with extreme pressure (4th component)
+        data.volume_fields = np.array(
+            [
+                [2.0, 2.0, 2.0, 5.0],  # p = 5.0 > 4.0 (exceeds threshold)
+                [2.5, 2.2, 1.8, 5.5],
+                [2.3, 1.9, 2.1, 6.0],
+            ]
+        )
+        data.volume_mesh_centers = np.random.rand(3, 3)
+
+        # Apply validator - should detect bounds violation and return None
+        result = validate_volume_sample_quality(
+            data,
+            statistical_tolerance=7.0,
+            velocity_max=3.5,
+            pressure_max=4.0,
+        )
+
+        # Sample should be rejected (returns None)
+        assert result is None
 
     def test_transform_with_default_processor_and_shuffle_data_large_array(self):
         """Test shuffling with a larger array to ensure efficiency."""

@@ -86,6 +86,10 @@ etl:
           _partial_: true
           air_density: 1.205  # kg/m³
           stream_velocity: 30.00  # m/s
+        - _target_: examples.external_aerodynamics.external_aero_surface_data_processors.validate_surface_sample_quality
+          _partial_: true
+          statistical_tolerance: 7.0  # Number of std devs for outlier detection
+          pressure_max: 4.0  # Max non-dim pressure coefficient
         - _target_: examples.external_aerodynamics.external_aero_surface_data_processors.update_surface_data_to_float32
           _partial_: true
 
@@ -101,6 +105,11 @@ etl:
           _partial_: true
         - _target_: examples.external_aerodynamics.external_aero_volume_data_processors.non_dimensionalize_volume_fields
           _partial_: true
+        - _target_: examples.external_aerodynamics.external_aero_volume_data_processors.validate_volume_sample_quality
+          _partial_: true
+          statistical_tolerance: 7.0  # Number of std devs for outlier detection
+          velocity_max: 3.5  # Max non-dim velocity magnitude
+          pressure_max: 4.0  # Max non-dim pressure coefficient
         - _target_: examples.external_aerodynamics.external_aero_volume_data_processors.update_volume_data_to_float32
           _partial_: true
         - _target_: examples.external_aerodynamics.external_aero_volume_data_processors.shuffle_volume_data

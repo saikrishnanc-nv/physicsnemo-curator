@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+from typing import Optional
 
 import numpy as np
 
@@ -22,6 +23,10 @@ from examples.external_aerodynamics.constants import PhysicsConstants
 from examples.external_aerodynamics.external_aero_utils import (
     get_volume_data,
     to_float32,
+)
+from examples.external_aerodynamics.external_aero_validation_utils import (
+    check_field_statistics,
+    check_volume_physics_bounds,
 )
 from examples.external_aerodynamics.schemas import (
     ExternalAerodynamicsExtractedDataInMemory,
@@ -102,7 +107,6 @@ def filter_volume_invalid_cells(
             f"({n_coords_filtered} due to NaN coords, {n_fields_filtered} due to NaN/inf fields). "
             "Check data quality."
         )
-        raise ValueError("Filtering removed all volume cells")
 
     logger.info(
         f"Filtered {n_filtered} invalid volume cells "
@@ -144,6 +148,59 @@ def update_volume_data_to_float32(
     """Update volume data to float32."""
     data.volume_mesh_centers = to_float32(data.volume_mesh_centers)
     data.volume_fields = to_float32(data.volume_fields)
+    return data
+
+
+def validate_volume_sample_quality(
+    data: ExternalAerodynamicsExtractedDataInMemory,
+    statistical_tolerance: float = 7.0,
+    velocity_max: float = 3.5,
+    pressure_max: float = 4.0,
+) -> Optional[ExternalAerodynamicsExtractedDataInMemory]:
+    """
+    Validate volume sample quality and reject entire sample if it fails checks.
+
+    This validator checks:
+    1. Statistical outliers: If all data points are beyond mean ± tolerance*std
+    2. Physics bounds: If max non-dimensionalized values exceed thresholds
+
+    Note: This should be applied AFTER non-dimensionalization.
+
+    Args:
+        data: External aerodynamics data with volume information
+        statistical_tolerance: Number of standard deviations for outlier detection (default: 7.0)
+        velocity_max: Maximum allowed non-dimensionalized velocity magnitude (default: 3.5)
+        pressure_max: Maximum allowed non-dimensionalized pressure (default: 4.0)
+
+    Returns:
+        Data unchanged if valid, None if sample should be rejected
+    """
+
+    if data.volume_fields is None or len(data.volume_fields) == 0:
+        logger.warning("Volume fields are empty, skipping validation")
+        return data
+
+    # 1. Check field statistics and perform statistical outlier filtering
+    is_invalid, vmax, vmin = check_field_statistics(
+        data.volume_fields, field_type="volume", tolerance=statistical_tolerance
+    )
+
+    if is_invalid:
+        logger.error(
+            "Sample rejected: Statistical outlier detection filtered all cells"
+        )
+        return None
+
+    # 2. Check physics-based bounds
+    exceeds_bounds, error_msg = check_volume_physics_bounds(
+        vmax, velocity_max=velocity_max, pressure_max=pressure_max
+    )
+
+    if exceeds_bounds:
+        logger.error(f"Sample rejected: Physics bounds exceeded: {error_msg}")
+        return None
+
+    logger.info("Volume sample passed quality checks")
     return data
 
 

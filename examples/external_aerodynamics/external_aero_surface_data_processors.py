@@ -16,11 +16,16 @@
 
 import logging
 import warnings
+from typing import Optional
 
 import numpy as np
 
 from examples.external_aerodynamics.constants import PhysicsConstants
 from examples.external_aerodynamics.external_aero_utils import to_float32
+from examples.external_aerodynamics.external_aero_validation_utils import (
+    check_field_statistics,
+    check_surface_physics_bounds,
+)
 from examples.external_aerodynamics.schemas import (
     ExternalAerodynamicsExtractedDataInMemory,
 )
@@ -178,6 +183,57 @@ def update_surface_data_to_float32(
     data.surface_areas = to_float32(data.surface_areas)
     data.surface_fields = to_float32(data.surface_fields)
 
+    return data
+
+
+def validate_surface_sample_quality(
+    data: ExternalAerodynamicsExtractedDataInMemory,
+    statistical_tolerance: float = 7.0,
+    pressure_max: float = 4.0,
+) -> Optional[ExternalAerodynamicsExtractedDataInMemory]:
+    """
+    Validate surface sample quality and reject entire sample if it fails checks.
+
+    This validator checks:
+    1. Statistical outliers: If all data points are beyond mean ± tolerance*std
+    2. Physics bounds: If max non-dimensionalized pressure exceeds threshold
+
+    Note: This should be applied AFTER non-dimensionalization.
+
+    Args:
+        data: External aerodynamics data with surface information
+        statistical_tolerance: Number of standard deviations for outlier detection (default: 7.0)
+        pressure_max: Maximum allowed non-dimensionalized pressure (default: 4.0)
+
+    Returns:
+        Data unchanged if valid, None if sample should be rejected
+    """
+
+    if data.surface_fields is None or len(data.surface_fields) == 0:
+        logger.warning("Surface fields are empty, skipping validation")
+        return data
+
+    # 1. Check field statistics and perform statistical outlier filtering
+    is_invalid, vmax, vmin = check_field_statistics(
+        data.surface_fields, field_type="surface", tolerance=statistical_tolerance
+    )
+
+    if is_invalid:
+        logger.error(
+            "Sample rejected: Statistical outlier detection filtered all cells"
+        )
+        return None
+
+    # 2. Check physics-based bounds
+    exceeds_bounds, error_msg = check_surface_physics_bounds(
+        vmax, pressure_max=pressure_max
+    )
+
+    if exceeds_bounds:
+        logger.error(f"Sample rejected: {error_msg}")
+        return None
+
+    logger.info("Surface sample passed quality checks")
     return data
 
 

@@ -210,19 +210,30 @@ def validate_surface_sample_quality(
     """
 
     if data.surface_fields is None or len(data.surface_fields) == 0:
-        logger.warning("Surface fields are empty, skipping validation")
+        logger.warning(
+            f"[{data.metadata.filename}] Surface fields are empty, skipping validation"
+        )
         return data
 
     # 1. Check field statistics and perform statistical outlier filtering
-    is_invalid, vmax, vmin = check_field_statistics(
+    is_invalid, vmax, vmin, n_filtered, n_total = check_field_statistics(
         data.surface_fields, field_type="surface", tolerance=statistical_tolerance
     )
 
     if is_invalid:
         logger.error(
-            "Sample rejected: Statistical outlier detection filtered all cells"
+            f"[{data.metadata.filename}] Sample rejected: "
+            f"Statistical outlier detection (mean ± {statistical_tolerance}σ) "
+            f"filtered all {n_total} cells"
         )
         return None
+
+    # Log statistics with filename
+    logger.info(
+        f"[{data.metadata.filename}] Surface field statistics: "
+        f"vmax={vmax}, vmin={vmin} "
+        f"(filtered {n_filtered}/{n_total} statistical outliers)"
+    )
 
     # 2. Check physics-based bounds
     exceeds_bounds, error_msg = check_surface_physics_bounds(
@@ -230,10 +241,10 @@ def validate_surface_sample_quality(
     )
 
     if exceeds_bounds:
-        logger.error(f"Sample rejected: {error_msg}")
+        logger.error(f"[{data.metadata.filename}] Sample rejected: {error_msg}")
         return None
 
-    logger.info("Surface sample passed quality checks")
+    logger.info(f"[{data.metadata.filename}] Surface sample passed quality checks")
     return data
 
 

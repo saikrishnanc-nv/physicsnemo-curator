@@ -203,6 +203,85 @@ surface_processors:
 - Processors must return the modified data object
 - Default processing always runs first, before any custom processors
 
+### Data Filtering
+
+The pipeline supports data quality filtering through **filters**, which are special
+transforms that can reject low-quality samples. In Curator, filters are implemented as
+transforms that return `None` when a sample should be rejected, allowing the ETL
+framework to skip writing that sample and continue processing.
+
+#### Sample-Level Filters
+
+Sample-level filters check overall data quality and reject entire samples that fail
+quality thresholds. These are particularly useful for filtering out simulation outliers or corrupted data.
+
+**Available sample-level filters:**
+
+- `validate_surface_sample_quality`: Validates surface data quality
+  - Statistical outlier detection (mean ± N×σ filtering)
+  - Physics-based threshold checks (pressure limits)
+
+- `validate_volume_sample_quality`: Validates volume data quality
+  - Statistical outlier detection (mean ± N×σ filtering)
+  - Physics-based threshold checks (velocity and pressure limits)
+
+**Important:** These filters must be applied **after non-dimensionalization** since they check non-dimensional values.
+
+#### Configuration Example
+
+See [external_aero_etl_drivaerml_filtering.yaml](../config/external_aero_etl_drivaerml_filtering.yaml)
+for a complete example with filtering enabled:
+
+```yaml
+surface_preprocessing:
+  surface_processors:
+    # ... other processors ...
+    - _target_: examples.external_aerodynamics.external_aero_surface_data_processors.non_dimensionalize_surface_fields
+      _partial_: true
+      air_density: 1.205
+      stream_velocity: 30.0
+    # Apply filter AFTER non-dimensionalization
+    - _target_: examples.external_aerodynamics.external_aero_surface_data_processors.validate_surface_sample_quality
+      _partial_: true
+      statistical_tolerance: 7.0  # Filter outliers beyond mean ± 7σ
+      pressure_max: 4.0           # Max non-dimensional pressure
+
+volume_preprocessing:
+  volume_processors:
+    - _target_: examples.external_aerodynamics.external_aero_volume_data_processors.non_dimensionalize_volume_fields
+      _partial_: true
+    # Apply filter AFTER non-dimensionalization
+    - _target_: examples.external_aerodynamics.external_aero_volume_data_processors.validate_volume_sample_quality
+      _partial_: true
+      statistical_tolerance: 7.0  # Filter outliers beyond mean ± 7σ
+      velocity_max: 3.5           # Max non-dimensional velocity magnitude
+      pressure_max: 4.0           # Max non-dimensional pressure
+```
+
+#### Running with Filtering
+
+To use the filtering configuration:
+
+```bash
+export PYTHONPATH=$PYTHONPATH:examples &&
+physicsnemo-curator-etl                                  \
+    --config-dir=examples/config                         \
+    --config-name=external_aero_etl_drivaerml_filtering  \
+    etl.source.input_dir=/data/drivaerml/                \
+    etl.sink.output_dir=/data/drivaerml.processed.filtered \
+    etl.common.model_type=surface
+```
+
+When a sample is rejected, you'll see log messages like:
+
+```text
+ERROR - [run_103] Sample rejected: Pressure exceeds threshold: vmax[p]=4.510 > 4.0
+[WARNING] No data was returned by transform: ExternalAerodynamicsVolumeTransformation for file run_103. Skipping.
+[INFO] Skipping write for run_103.
+```
+
+The pipeline continues processing remaining samples without interruption.
+
 ### Mesh Decimation Options
 
 PhysicsNeMo-Curator supports mesh decimation with the following options:

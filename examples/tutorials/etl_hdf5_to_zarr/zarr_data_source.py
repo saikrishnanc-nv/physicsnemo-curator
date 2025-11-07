@@ -47,22 +47,32 @@ class ZarrDataSource(DataSource):
         """Not implemented - this DataSource only writes."""
         raise NotImplementedError("ZarrDataSource only supports writing")
 
-    def write(self, data: Dict[str, Any], filename: str) -> None:
-        """Write transformed data to a Zarr store.
+    def _get_output_path(self, filename: str) -> Path:
+        """Get the output path for a given filename.
+
+        Args:
+            filename: Name of the file to process
+
+        Returns:
+            Path object representing the output location.
+        """
+        return self.output_dir / f"{filename}.zarr"
+
+    def _write_impl_temp_file(self, data: Dict[str, Any], output_path: Path) -> None:
+        """
+        Implement actual data writing logic to a temporary Zarr store.
+
+        This method is called by the write() method to write the data to a temporary Zarr store.
+        The data is written to a temporary Zarr store and then renamed to the final output path.
+        This is to improve the robustness of the write operation.
 
         Args:
             data: Transformed data from H5ToZarrTransformation
-            filename: Base filename for the Zarr store
+            output_path: Path where data should be written (may be temporary)
         """
-        store_path = self.output_dir / f"{filename}.zarr"
-
-        if store_path.exists():
-            self.logger.info(f"Skipping {filename} - Zarr store already exists")
-            return
-
         # Create Zarr store
-        self.logger.info(f"Creating Zarr store: {store_path}")
-        store = zarr.DirectoryStore(store_path)
+        self.logger.info(f"Creating Zarr store: {output_path}")
+        store = zarr.DirectoryStore(output_path)
         root = zarr.group(store=store)
 
         # Store metadata as root attributes

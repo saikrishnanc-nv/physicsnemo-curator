@@ -87,7 +87,22 @@ class H5DataSource(DataSource):
         self.logger.warning(f"Loaded data with {len(data['temperature'])} points")
         return data
 
-    def write(self, data: Dict[str, Any], filename: str) -> None:
+    def _get_output_path(self, filename: str) -> Path:
+        """Get the final output path for a given filename.
+
+        Args:
+            filename: Name of the file to process
+
+        Returns:
+            Path object representing the final output location
+        """
+        return NotImplementedError("H5DataSource only supports reading")
+
+    def _write_impl_temp_file(
+        self,
+        data: Dict[str, Any],
+        output_path: Path,
+    ) -> None:
         """Not implemented - this DataSource only reads."""
         raise NotImplementedError("H5DataSource only supports reading")
 

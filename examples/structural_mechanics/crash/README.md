@@ -35,7 +35,7 @@ Example command line to launch Curator for crash simulation data:
 ```bash
 export PYTHONPATH=$PYTHONPATH:examples &&
 physicsnemo-curator-etl                                    \
-    --config-dir=examples/config                           \
+    --config-dir=examples/structural_mechanics/crash/config \
     --config-name=crash_etl                                \
     etl.source.input_dir=/data/crash_sims/                 \
     etl.sink.output_dir=/data/crash_processed/             \
@@ -44,7 +44,7 @@ physicsnemo-curator-etl                                    \
 
 ### Configuration Options
 
-The main configuration file is [`crash_etl.yaml`](../../config/crash_etl.yaml).
+The main configuration file is [`crash_etl.yaml`](./config/crash_etl.yaml).
 
 #### Key Parameters
 
@@ -139,7 +139,7 @@ To change the wall node filtering threshold:
 
 ```bash
 physicsnemo-curator-etl \
-    --config-dir=examples/config \
+    --config-dir=examples/structural_mechanics/crash/config \
     --config-name=crash_etl \
     etl.transformations.crash_transform.wall_threshold=2.0
 ```
@@ -152,7 +152,7 @@ To avoid reprocessing existing files:
 
 ```bash
 physicsnemo-curator-etl \
-    --config-dir=examples/config \
+    --config-dir=examples/structural_mechanics/crash/config \
     --config-name=crash_etl \
     etl.sink.overwrite_existing=false
 ```

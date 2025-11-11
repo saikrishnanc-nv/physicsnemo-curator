@@ -14,23 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  - /serialization_format: vtp  # Default value, can be overridden via CLI
-  - _self_
-
-etl:
-  processing:
-    num_processes: 12  # Process 4 runs in parallel
-
-  source:
-    _target_: examples.structural_mechanics.crash.data_sources.CrashD3PlotDataSource
-    _convert_: all
-    input_dir: ???
-
-  transformations:
-    crash_transform:
-      _target_: examples.structural_mechanics.crash.data_transformations.CrashDataTransformation
-      _convert_: all
-      wall_threshold: 1.0
-
-  sink: ${serialization_format.sink}
+sink:
+  _target_: examples.structural_mechanics.crash.data_sources.CrashVTPDataSource
+  _convert_: all
+  output_dir: ???
+  overwrite_existing: true
+  time_step: 0.005

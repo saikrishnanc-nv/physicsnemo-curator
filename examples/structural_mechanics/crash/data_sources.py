@@ -21,12 +21,17 @@ from typing import Any, Dict, List
 import numpy as np
 import pyvista as pv
 import zarr
-from lasso.dyna import ArrayType, D3plot
 from numcodecs import Blosc
 
 from physicsnemo_curator.etl.data_sources import DataSource
 from physicsnemo_curator.etl.processing_config import ProcessingConfig
 
+from .crash_data_processors import (
+    compute_node_thickness,
+    find_k_file,
+    load_d3plot_data,
+    parse_k_file,
+)
 from .schemas import CrashExtractedDataInMemory, CrashMetadata
 
 
@@ -74,16 +79,16 @@ class CrashD3PlotDataSource(DataSource):
         self.logger.info(f"Reading {d3plot_path}")
 
         coords, pos_raw, mesh_connectivity, part_ids, actual_part_ids = (
-            self.load_d3plot_data(str(d3plot_path))
+            load_d3plot_data(str(d3plot_path))
         )
 
         # Parse .k file for thickness
-        k_file_path = self.find_k_file(run_dir=run_dir)
+        k_file_path = find_k_file(run_dir=run_dir)
         node_thickness = np.zeros(len(coords))
         if k_file_path:
             self.logger.info(f"Parsing thickness from {k_file_path}")
-            part_thickness_map = self.parse_k_file(k_file_path=k_file_path)
-            node_thickness = self.compute_node_thickness(
+            part_thickness_map = parse_k_file(k_file_path=k_file_path)
+            node_thickness = compute_node_thickness(
                 mesh_connectivity=mesh_connectivity,
                 part_ids=part_ids,
                 part_thickness_map=part_thickness_map,
@@ -102,167 +107,6 @@ class CrashD3PlotDataSource(DataSource):
             mesh_connectivity=mesh_connectivity,
             node_thickness=node_thickness,
         )
-
-    @staticmethod
-    def load_d3plot_data(data_path: str):
-        """Load node coordinates and displacements from a d3plot file."""
-        dp = D3plot(data_path)
-        coords = dp.arrays[ArrayType.node_coordinates]  # (num_nodes, 3)
-        pos_raw = dp.arrays[ArrayType.node_displacement]  # (timesteps, num_nodes, 3)
-        mesh_connectivity = dp.arrays[ArrayType.element_shell_node_indexes]
-        part_ids = dp.arrays[ArrayType.element_shell_part_indexes]
-
-        # Get actual part IDs if available
-        actual_part_ids = None
-        if ArrayType.part_ids in dp.arrays:
-            actual_part_ids = dp.arrays[ArrayType.part_ids]
-
-        return coords, pos_raw, mesh_connectivity, part_ids, actual_part_ids
-
-    @staticmethod
-    def find_k_file(run_dir: Path):
-        """Find .k file in run directory."""
-        k_files = list(run_dir.glob("*.k"))
-        return k_files[0] if k_files else None
-
-    @staticmethod
-    def parse_k_file(k_file_path: Path):
-        """Parse LS-DYNA .k file to extract part thickness information."""
-        part_to_section = {}
-        section_thickness = {}
-
-        with open(k_file_path, "r") as f:
-            lines = [
-                line.strip() for line in f if line.strip() and not line.startswith("$")
-            ]
-
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if "*PART" in line.upper():
-                # After *PART:
-                # i+1 = part name (skip)
-                # i+2 = part id, section id, material id
-                if i + 2 < len(lines):
-                    tokens = lines[i + 2].split()
-                    if len(tokens) >= 2:
-                        part_id = int(tokens[0])
-                        section_id = int(tokens[1])
-                        part_to_section[part_id] = section_id
-                i += 3
-            elif "*SECTION_SHELL" in line.upper():
-                # Multiple sections can be defined under one *SECTION_SHELL keyword
-                # Each section has two lines: header line and thickness line
-                i += 1  # Skip the *SECTION_SHELL line
-                while i < len(lines) and not lines[i].startswith("*"):
-                    # Check if this line looks like a section header (starts with a number)
-                    if i < len(lines) and lines[i].strip() and lines[i][0].isdigit():
-                        header_line = lines[i]
-                        thickness_line = lines[i + 1] if i + 1 < len(lines) else ""
-
-                        # Extract section ID from header line (first number)
-                        header_tokens = header_line.split()
-                        if len(header_tokens) >= 1:
-                            try:  # noqa: PERF203
-                                section_id = int(header_tokens[0])
-                            except ValueError:
-                                section_id = None
-                        else:
-                            section_id = None
-
-                        # Extract thickness values from thickness line
-                        thickness_values = []
-                        thickness_tokens = thickness_line.split()
-                        for t in thickness_tokens:
-                            try:
-                                thickness_values.append(float(t))
-                            except ValueError:  # noqa: PERF203
-                                thickness_values.append(0.0)
-                        # Calculate average thickness (ignore zeros)
-                        non_zero_thicknesses = [t for t in thickness_values if t > 0.0]
-                        if non_zero_thicknesses:
-                            thickness = sum(non_zero_thicknesses) / len(
-                                non_zero_thicknesses
-                            )
-                        elif thickness_values:
-                            thickness = sum(thickness_values) / len(thickness_values)
-                        else:
-                            thickness = 0.0
-                        if section_id is not None:
-                            section_thickness[section_id] = thickness
-
-                        i += 2  # Skip both header and thickness lines
-                    else:
-                        i += 1
-            else:
-                i += 1
-
-        part_thickness = {
-            pid: section_thickness.get(sid, 0.0) for pid, sid in part_to_section.items()
-        }
-        return part_thickness
-
-    @staticmethod
-    def compute_node_thickness(
-        mesh_connectivity: np.ndarray,
-        part_ids: np.ndarray,
-        part_thickness_map: dict,
-        actual_part_ids: np.ndarray = None,
-    ) -> np.ndarray:
-        """
-        Compute thickness for each node based on elements connected to it.
-
-        Args:
-            mesh_connectivity: Element connectivity array (num_elements, num_nodes_per_element)
-            part_ids: Part IDs for each element (num_elements)
-            part_thickness_map: Mapping from part ID to thickness
-            actual_part_ids: Actual part IDs if available (num_parts)
-
-        Returns:
-            node_thickness: Array of thickness values for each node (num_nodes)
-        """
-        # Create mapping from part index to actual part ID
-        if actual_part_ids is not None:
-            part_index_to_id = {
-                i: actual_part_id
-                for i, actual_part_id in enumerate(actual_part_ids)
-                if i > 0  # Skip index 0
-            }
-        else:
-            sorted_part_ids = sorted(part_thickness_map.keys())
-            part_index_to_id = {
-                i: part_id for i, part_id in enumerate(sorted_part_ids, 1)
-            }
-
-        # Get element thickness
-        element_thickness = np.zeros(len(part_ids))
-        for i, part_index in enumerate(part_ids):
-            actual_part_id = part_index_to_id.get(part_index)
-            if actual_part_id is not None:
-                thickness = part_thickness_map.get(actual_part_id, 0.0)
-                element_thickness[i] = thickness
-
-        # Find maximum node index to initialize node thickness array
-        max_node_idx = 0
-        for element in mesh_connectivity:
-            max_node_idx = max(max_node_idx, max(element))
-
-        node_thickness = np.zeros(max_node_idx + 1)
-        node_thickness_count = np.zeros(max_node_idx + 1)
-
-        # Accumulate thickness from all elements connected to each node
-        for i, element in enumerate(mesh_connectivity):
-            thickness = element_thickness[i]
-            for node_idx in element:
-                node_thickness[node_idx] += thickness
-                node_thickness_count[node_idx] += 1
-
-        # Average thickness for nodes connected to multiple elements
-        for i in range(len(node_thickness)):
-            if node_thickness_count[i] > 0:
-                node_thickness[i] /= node_thickness_count[i]
-
-        return node_thickness
 
     def _get_output_path(self, filename: str) -> Path:
         """Not implemented - this source only reads."""
@@ -447,6 +291,7 @@ class CrashZarrDataSource(DataSource):
         output_dir: str,
         overwrite_existing: bool = True,
         compression_level: int = 3,
+        compression_method: str = "zstd",
     ):
         """Initialize the Zarr data source.
 
@@ -455,15 +300,17 @@ class CrashZarrDataSource(DataSource):
             output_dir: Directory to write Zarr stores
             overwrite_existing: Whether to overwrite existing files
             compression_level: Compression level (1-9, higher = more compression)
+            compression_method: Compression method
         """
         super().__init__(cfg)
         self.output_dir = Path(output_dir)
         self.overwrite_existing = overwrite_existing
         self.compression_level = compression_level
+        self.compression_method = compression_method
 
         # Set up compressor
         self.compressor = Blosc(
-            cname="zstd", clevel=compression_level, shuffle=Blosc.SHUFFLE
+            cname=compression_method, clevel=compression_level, shuffle=Blosc.SHUFFLE
         )
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -517,7 +364,7 @@ class CrashZarrDataSource(DataSource):
         root.attrs["num_timesteps"] = data.filtered_pos_raw.shape[0]
         root.attrs["num_nodes"] = data.filtered_pos_raw.shape[1]
         root.attrs["num_edges"] = len(data.edges)
-        root.attrs["compression"] = "zstd"
+        root.attrs["compression"] = self.compression_method
         root.attrs["compression_level"] = self.compression_level
 
         # Calculate optimal chunks for temporal data

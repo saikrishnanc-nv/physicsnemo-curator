@@ -15,11 +15,15 @@
 # limitations under the License.
 
 
+import logging
+from typing import Callable, Optional
+
 import numpy as np
 
 from physicsnemo_curator.etl.data_transformations import DataTransformation
 from physicsnemo_curator.etl.processing_config import ProcessingConfig
 
+from .crash_data_processors import build_edges_from_mesh_connectivity, compute_node_type
 from .schemas import CrashExtractedDataInMemory
 
 
@@ -30,11 +34,17 @@ class CrashDataTransformation(DataTransformation):
         self,
         cfg: ProcessingConfig,
         wall_threshold: float = 1.0,
+        crash_processors: Optional[tuple[Callable, ...]] = None,
     ):
         super().__init__(cfg)
+        self.logger = logging.getLogger(__name__)
         self.wall_threshold = wall_threshold
+        self.crash_processors = crash_processors
 
-    def transform(self, data: CrashExtractedDataInMemory) -> CrashExtractedDataInMemory:
+    def transform(
+        self,
+        data: CrashExtractedDataInMemory,
+    ) -> CrashExtractedDataInMemory:
         """Transform raw d3plot data into VTP format.
 
         Steps:
@@ -55,7 +65,7 @@ class CrashDataTransformation(DataTransformation):
         self.logger.info(f"Transforming {data.metadata.filename}")
 
         # Step 1: Identify wall nodes
-        node_type = self.compute_node_type(data.pos_raw, threshold=self.wall_threshold)
+        node_type = compute_node_type(data.pos_raw, threshold=self.wall_threshold)
         keep_nodes = sorted(np.where(node_type == 0)[0])  # keep structure
         node_map = {old_idx: new_idx for new_idx, old_idx in enumerate(keep_nodes)}
 
@@ -95,7 +105,7 @@ class CrashDataTransformation(DataTransformation):
             num_kept = filtered_pos_raw.shape[1]
 
         # Step 6: Build edges
-        edges = self.build_edges_from_mesh_connectivity(filtered_mesh_connectivity)
+        edges = build_edges_from_mesh_connectivity(filtered_mesh_connectivity)
 
         self.logger.info(
             f"Processed: {filtered_pos_raw.shape[1]} nodes, "
@@ -114,38 +124,3 @@ class CrashDataTransformation(DataTransformation):
             filtered_node_thickness=filtered_node_thickness,
             edges=edges,
         )
-
-    @staticmethod
-    def compute_node_type(pos_raw: np.ndarray, threshold: float = 1.0) -> np.ndarray:
-        """
-        Identify structural vs wall nodes based on displacement variation.
-
-        Args:
-            pos_raw: (timesteps, num_nodes, 3) raw displacement trajectories
-            threshold: max displacement below which a node is considered "wall"
-
-        Returns:
-            node_type: (num_nodes,) uint8 array where 1=wall, 0=structure
-        """
-        variation = np.max(np.abs(pos_raw - pos_raw[0:1, :, :]), axis=0)
-        variation = np.max(variation, axis=1)
-        is_wall = variation < threshold
-        return np.where(is_wall, 1, 0).astype(np.uint8)
-
-    @staticmethod
-    def build_edges_from_mesh_connectivity(mesh_connectivity) -> set:
-        """
-        Build unique edges from mesh connectivity.
-
-        Args:
-            mesh_connectivity: list of elements (list[int])
-
-        Returns:
-            Set of unique edges (i,j)
-        """
-        edges = set()
-        for cell in mesh_connectivity:
-            n = len(cell)
-            for idx in range(n):
-                edges.add(tuple(sorted((cell[idx], cell[(idx + 1) % n]))))
-        return edges

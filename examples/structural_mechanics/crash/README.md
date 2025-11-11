@@ -34,11 +34,12 @@ Example command line to launch Curator for crash simulation data:
 
 ```bash
 export PYTHONPATH=$PYTHONPATH:examples &&
-physicsnemo-curator-etl                                    \
-    --config-dir=examples/structural_mechanics/crash/config \
-    --config-name=crash_etl                                \
-    etl.source.input_dir=/data/crash_sims/                 \
-    etl.sink.output_dir=/data/crash_processed/             \
+physicsnemo-curator-etl                                         \
+    --config-dir=examples/structural_mechanics/crash/config     \
+    --config-name=crash_etl                                     \
+    etl.source.input_dir=/data/crash_sims/                      \
+    serialization_format=vtp                                    \
+    serialization_format.sink.output_dir=/data/crash_processed/ \
     etl.processing.num_processes=4
 ```
 
@@ -51,7 +52,10 @@ The main configuration file is [`crash_etl.yaml`](./config/crash_etl.yaml).
 - **`etl.source.input_dir`**: Directory containing run folders with d3plot files
   - Expected structure: `input_dir/Run100/d3plot`, `input_dir/Run100/*.k`
 
-- **`etl.sink.output_dir`**: Directory where processed files will be written
+- **`serialization_format`**: The default is VTP, but users can use this CLI flag to toggle between VTP and Zarr.
+Please refer to the [serialization_format config files](./config/serialization_format/) to understand the necessary config.
+
+- **`serialization_format.sink.output_dir`**: Directory where processed files will be written
 
 - **`etl.processing.num_processes`**: Number of parallel processes (default: 4)
 
@@ -60,18 +64,33 @@ The main configuration file is [`crash_etl.yaml`](./config/crash_etl.yaml).
 
 #### Output Formats
 
-You can choose between two output formats by configuring the sink:
+You can choose between two output formats using the `serialization_format` config group. The default
+format is VTP. To switch to Zarr, use `serialization_format=zarr` on the command line.
+
+**Key concept**: The `serialization_format` is a Hydra config group that determines the sink
+configuration. To override sink parameters, use the pattern
+`serialization_format.sink.<parameter>=<value>`.
 
 ##### VTP Output (for visualization and training)
 
-```yaml
-etl:
-  sink:
-    _target_: examples.structural_mechanics.crash.data_sources.CrashVTPDataSource
-    output_dir: /data/crash_processed_vtp
-    overwrite_existing: false
-    time_step: 0.005  # Time step between frames (seconds)
+**Command line:**
+
+```bash
+physicsnemo-curator-etl \
+    --config-dir=examples/structural_mechanics/crash/config \
+    --config-name=crash_etl \
+    serialization_format=vtp \
+    etl.source.input_dir=/data/crash_sims \
+    serialization_format.sink.output_dir=/data/crash_processed_vtp \
+    serialization_format.sink.overwrite_existing=false
 ```
+
+**Config:** See [`config/serialization_format/vtp.yaml`](./config/serialization_format/vtp.yaml)
+
+**VTP-specific parameters:**
+
+- `time_step`: Time step between simulation frames in seconds (default: 0.005)
+- `overwrite_existing`: Whether to overwrite existing output files (default: true)
 
 Output structure:
 
@@ -90,14 +109,25 @@ Each VTP file contains:
 
 ##### Zarr Output (for ML training)
 
-```yaml
-etl:
-  sink:
-    _target_: examples.structural_mechanics.crash.data_sources.CrashZarrDataSource
-    output_dir: /data/crash_processed_zarr
-    overwrite_existing: false
-    compression_level: 3  # 1-9, higher = more compression
+**Command line:**
+
+```bash
+physicsnemo-curator-etl \
+    --config-dir=examples/structural_mechanics/crash/config \
+    --config-name=crash_etl \
+    serialization_format=zarr \
+    etl.source.input_dir=/data/crash_sims \
+    serialization_format.sink.output_dir=/data/crash_processed_zarr \
+    serialization_format.sink.compression_level=5
 ```
+
+**Config:** See [`config/serialization_format/zarr.yaml`](./config/serialization_format/zarr.yaml)
+
+**Zarr-specific parameters:**
+
+- `compression_level`: Compression level (1-9, higher = more compression, default: 3)
+- `compression_method`: Compression codec (default: "zstd")
+- `overwrite_existing`: Whether to overwrite existing output stores (default: true)
 
 Output structure:
 
@@ -111,6 +141,11 @@ crash_processed_zarr/
 ├── Run101.zarr/
 └── ...
 ```
+
+**When to use each format:**
+
+- **VTP**: Best for visualization (ParaView, PyVista), interactive analysis, and smaller datasets
+- **Zarr**: Best for large-scale ML training, cloud storage, and when you need efficient chunked access
 
 ### Transformation Pipeline
 
@@ -141,6 +176,8 @@ To change the wall node filtering threshold:
 physicsnemo-curator-etl \
     --config-dir=examples/structural_mechanics/crash/config \
     --config-name=crash_etl \
+    etl.source.input_dir=/data/crash_sims \
+    serialization_format.sink.output_dir=/data/output \
     etl.transformations.crash_transform.wall_threshold=2.0
 ```
 
@@ -154,7 +191,9 @@ To avoid reprocessing existing files:
 physicsnemo-curator-etl \
     --config-dir=examples/structural_mechanics/crash/config \
     --config-name=crash_etl \
-    etl.sink.overwrite_existing=false
+    etl.source.input_dir=/data/crash_sims \
+    serialization_format.sink.output_dir=/data/output \
+    serialization_format.sink.overwrite_existing=false
 ```
 
 The pipeline will skip runs that already have output files.

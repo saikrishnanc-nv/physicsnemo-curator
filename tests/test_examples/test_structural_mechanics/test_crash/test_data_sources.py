@@ -16,6 +16,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -67,110 +68,195 @@ def mock_crash_data():
     )
 
 
-@pytest.fixture
-def temp_k_file():
-    """Create a temporary .k file for testing."""
-    k_content = """$# LS-DYNA Keyword file
-*PART
-Part 1
-1   1   1
-*SECTION_SHELL
-1
-2.5
-*PART
-Part 2
-2   2   1
-*SECTION_SHELL
-2
-1.5
-"""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".k", delete=False) as f:
-        f.write(k_content)
-        temp_path = f.name
-
-    yield Path(temp_path)
-    Path(temp_path).unlink(missing_ok=True)
+# Tests for CrashD3PlotDataSource
 
 
-# Tests for CrashD3PlotDataSource static methods
+def test_d3plot_source_get_file_list():
+    """Test that get_file_list finds all run folders with d3plot files."""
+    from physicsnemo_curator.etl.processing_config import ProcessingConfig
+
+    cfg = ProcessingConfig(num_processes=1)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Create mock run folders with d3plot files
+        (temp_path / "Run001").mkdir()
+        (temp_path / "Run001" / "d3plot").touch()
+
+        (temp_path / "Run002").mkdir()
+        (temp_path / "Run002" / "d3plot").touch()
+
+        # Create a folder without d3plot (should be ignored)
+        (temp_path / "EmptyRun").mkdir()
+
+        # Create a regular file (should be ignored)
+        (temp_path / "some_file.txt").touch()
+
+        source = CrashD3PlotDataSource(cfg, temp_dir)
+        file_list = source.get_file_list()
+
+        assert len(file_list) == 2, f"Expected 2 runs, got {len(file_list)}"
+        assert "Run001" in file_list, "Run001 should be in file list"
+        assert "Run002" in file_list, "Run002 should be in file list"
+        assert "EmptyRun" not in file_list, "EmptyRun should not be in file list"
 
 
-def test_parse_k_file(temp_k_file):
-    """Test parsing of .k file for thickness information."""
-    part_thickness_map = CrashD3PlotDataSource.parse_k_file(temp_k_file)
+def test_d3plot_source_read_file():
+    """Test reading a d3plot file."""
+    from physicsnemo_curator.etl.processing_config import ProcessingConfig
 
-    # Should have 2 parts
-    assert (
-        len(part_thickness_map) == 2
-    ), f"Expected 2 parts, got {len(part_thickness_map)}"
+    cfg = ProcessingConfig(num_processes=1)
 
-    # Check thickness values
-    assert (
-        part_thickness_map[1] == 2.5
-    ), f"Expected part 1 thickness 2.5, got {part_thickness_map[1]}"
-    assert (
-        part_thickness_map[2] == 1.5
-    ), f"Expected part 2 thickness 1.5, got {part_thickness_map[2]}"
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
 
+        # Create mock run folder
+        run_dir = temp_path / "Run001"
+        run_dir.mkdir()
+        (run_dir / "d3plot").touch()
 
-def test_compute_node_thickness_basic():
-    """Test node thickness computation from element thickness."""
-    # Simple mesh: 2 elements, 6 nodes (sharing 2 nodes)
-    mesh_connectivity = [
-        [0, 1, 2, 3],  # Element 0 (quad)
-        [1, 4, 5, 2],  # Element 1 (quad, shares nodes 1 and 2)
-    ]
+        # Create a mock .k file
+        k_file = run_dir / "model.k"
+        k_file.write_text("*PART\nPart 1\n1   1   1\n*SECTION_SHELL\n1\n2.5\n")
 
-    part_ids = np.array([1, 2])  # Element 0 is part 1, element 1 is part 2
-    part_thickness_map = {1: 2.0, 2: 1.0}
-    actual_part_ids = np.array([0, 1, 2])  # Index 0 unused, 1->part1, 2->part2
+        # Mock the load_d3plot_data function
+        mock_coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        mock_pos_raw = np.array(
+            [
+                [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+                [[0, 0, 0], [1.1, 0, 0], [0, 1, 0]],
+            ],
+            dtype=np.float32,
+        )
+        mock_connectivity = [[0, 1, 2]]
+        mock_part_ids = np.array([1])
+        mock_actual_part_ids = np.array([0, 1])
 
-    node_thickness = CrashD3PlotDataSource.compute_node_thickness(
-        mesh_connectivity, part_ids, part_thickness_map, actual_part_ids
-    )
+        with patch(
+            "examples.structural_mechanics.crash.data_sources.load_d3plot_data"
+        ) as mock_load:
+            mock_load.return_value = (
+                mock_coords,
+                mock_pos_raw,
+                mock_connectivity,
+                mock_part_ids,
+                mock_actual_part_ids,
+            )
 
-    # Node 0 and 3 only in element 0: thickness = 2.0
-    assert (
-        node_thickness[0] == 2.0
-    ), f"Expected thickness 2.0 for node 0, got {node_thickness[0]}"
-    assert (
-        node_thickness[3] == 2.0
-    ), f"Expected thickness 2.0 for node 3, got {node_thickness[3]}"
+            source = CrashD3PlotDataSource(cfg, temp_dir)
+            result = source.read_file("Run001")
 
-    # Nodes 1 and 2 in both elements: thickness = (2.0 + 1.0) / 2 = 1.5
-    assert (
-        node_thickness[1] == 1.5
-    ), f"Expected thickness 1.5 for node 1, got {node_thickness[1]}"
-    assert (
-        node_thickness[2] == 1.5
-    ), f"Expected thickness 1.5 for node 2, got {node_thickness[2]}"
-
-    # Nodes 4 and 5 only in element 1: thickness = 1.0
-    assert (
-        node_thickness[4] == 1.0
-    ), f"Expected thickness 1.0 for node 4, got {node_thickness[4]}"
-    assert (
-        node_thickness[5] == 1.0
-    ), f"Expected thickness 1.0 for node 5, got {node_thickness[5]}"
+            # Verify the result
+            assert isinstance(result, CrashExtractedDataInMemory)
+            assert result.metadata.filename == "Run001"
+            assert result.pos_raw.shape == (2, 3, 3)
+            assert len(result.mesh_connectivity) == 1
+            assert len(result.node_thickness) == 3
+            # Thickness should be 2.5 for all nodes (from .k file)
+            np.testing.assert_array_almost_equal(
+                result.node_thickness, np.array([2.5, 2.5, 2.5])
+            )
 
 
-def test_compute_node_thickness_no_actual_ids():
-    """Test node thickness computation without actual_part_ids."""
-    mesh_connectivity = [[0, 1, 2]]
-    part_ids = np.array([1])
-    part_thickness_map = {10: 3.0}  # Part ID 10 (will be mapped to index 1)
+def test_d3plot_source_read_file_no_k_file():
+    """Test reading a d3plot file without a .k file."""
+    from physicsnemo_curator.etl.processing_config import ProcessingConfig
 
-    node_thickness = CrashD3PlotDataSource.compute_node_thickness(
-        mesh_connectivity, part_ids, part_thickness_map, actual_part_ids=None
-    )
+    cfg = ProcessingConfig(num_processes=1)
 
-    # All nodes should have thickness 3.0
-    assert node_thickness[0] == 3.0
-    assert node_thickness[1] == 3.0
-    assert node_thickness[2] == 3.0
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Create mock run folder without .k file
+        run_dir = temp_path / "Run001"
+        run_dir.mkdir()
+        (run_dir / "d3plot").touch()
+
+        # Mock the load_d3plot_data function
+        mock_coords = np.array([[0, 0, 0], [1, 0, 0]], dtype=np.float32)
+        mock_pos_raw = np.array(
+            [[[0, 0, 0], [1, 0, 0]], [[0, 0, 0], [1.1, 0, 0]]], dtype=np.float32
+        )
+        mock_connectivity = [[0, 1]]
+        mock_part_ids = np.array([1])
+        mock_actual_part_ids = None
+
+        with patch(
+            "examples.structural_mechanics.crash.data_sources.load_d3plot_data"
+        ) as mock_load:
+            mock_load.return_value = (
+                mock_coords,
+                mock_pos_raw,
+                mock_connectivity,
+                mock_part_ids,
+                mock_actual_part_ids,
+            )
+
+            source = CrashD3PlotDataSource(cfg, temp_dir)
+            result = source.read_file("Run001")
+
+            # Verify thickness is zero when no .k file
+            assert len(result.node_thickness) == 2
+            np.testing.assert_array_equal(result.node_thickness, np.array([0.0, 0.0]))
 
 
-# Tests for CrashVTPDataSource
+def test_d3plot_source_should_skip():
+    """Test that CrashD3PlotDataSource never skips files."""
+    from physicsnemo_curator.etl.processing_config import ProcessingConfig
+
+    cfg = ProcessingConfig(num_processes=1)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        (temp_path / "Run001").mkdir()
+        (temp_path / "Run001" / "d3plot").touch()
+
+        source = CrashD3PlotDataSource(cfg, temp_dir)
+
+        # Should never skip
+        assert not source.should_skip("Run001")
+        assert not source.should_skip("Run002")
+        assert not source.should_skip("NonExistentRun")
+
+
+def test_d3plot_source_write_not_implemented():
+    """Test that write methods raise NotImplementedError."""
+    from physicsnemo_curator.etl.processing_config import ProcessingConfig
+
+    cfg = ProcessingConfig(num_processes=1)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        (temp_path / "Run001").mkdir()
+        (temp_path / "Run001" / "d3plot").touch()
+
+        source = CrashD3PlotDataSource(cfg, temp_dir)
+
+        # Test that write raises NotImplementedError
+        with pytest.raises(NotImplementedError, match="only supports reading"):
+            source.write(None, "test")
+
+        # Test that _get_output_path raises NotImplementedError
+        with pytest.raises(NotImplementedError, match="only supports reading"):
+            source._get_output_path("test")
+
+        # Test that _write_impl_temp_file raises NotImplementedError
+        with pytest.raises(NotImplementedError, match="only supports reading"):
+            source._write_impl_temp_file(None, Path("test"))
+
+
+def test_d3plot_source_nonexistent_directory():
+    """Test that CrashD3PlotDataSource raises error for nonexistent directory."""
+    from physicsnemo_curator.etl.processing_config import ProcessingConfig
+
+    cfg = ProcessingConfig(num_processes=1)
+
+    with pytest.raises(FileNotFoundError, match="Input directory does not exist"):
+        CrashD3PlotDataSource(cfg, "/nonexistent/path")
+
+
+# Tests for VTP and Zarr sinks
 
 
 def test_vtp_sink_output_path():
@@ -261,9 +347,6 @@ def test_vtp_sink_should_skip():
         assert not sink.should_skip(
             "non_existent_run"
         ), "Should not skip non-existent file"
-
-
-# Tests for CrashZarrDataSource
 
 
 def test_zarr_sink_output_path():

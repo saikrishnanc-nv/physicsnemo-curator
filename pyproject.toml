@@ -19,6 +19,7 @@ dependencies = [
     "zarr~=2.18",
     "numcodecs>=0.13.1",
     "tqdm>=4.67.1",
+    "lasso-python==2.0.3",
 ]
 dynamic = ["version"]
 

@@ -124,15 +124,15 @@ def test_config_override():
         assert cfg.etl.sink.overwrite_existing is False
 
 
-def test_config_required_fields():
+def test_config_raises_errors_when_required_fields_are_not_provided():
     """Test that required fields raise errors when not provided."""
     import pytest
-    from omegaconf.errors import InterpolationResolutionError
+    from omegaconf.errors import MissingMandatoryValue
 
     # Initialize Hydra with the config directory
     with initialize(version_base="1.3", config_path=str(get_config_path())):
         # Test that missing input_dir raises error
-        with pytest.raises(InterpolationResolutionError):
+        with pytest.raises(MissingMandatoryValue):
             cfg = compose(
                 config_name="crash_etl",
                 overrides=["serialization_format.sink.output_dir=/path/to/output"],
@@ -141,7 +141,7 @@ def test_config_required_fields():
             _ = cfg.etl.source.input_dir
 
         # Test that missing output_dir raises error
-        with pytest.raises(InterpolationResolutionError):
+        with pytest.raises(MissingMandatoryValue):
             cfg = compose(
                 config_name="crash_etl",
                 overrides=["etl.source.input_dir=/path/to/input"],

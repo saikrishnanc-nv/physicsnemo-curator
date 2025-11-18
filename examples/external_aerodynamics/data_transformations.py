@@ -19,31 +19,28 @@ import warnings
 from typing import Callable, Optional
 
 import numpy as np
-from numcodecs import Blosc
-
-from examples.external_aerodynamics.external_aero_geometry_data_processors import (
+from constants import PhysicsConstants
+from external_aero_geometry_data_processors import (
     default_geometry_processing_for_external_aerodynamics,
 )
-from examples.external_aerodynamics.external_aero_surface_data_processors import (
+from external_aero_surface_data_processors import (
     default_surface_processing_for_external_aerodynamics,
 )
-from examples.external_aerodynamics.external_aero_volume_data_processors import (
+from external_aero_utils import to_float32
+from external_aero_volume_data_processors import (
     default_volume_processing_for_external_aerodynamics,
 )
-from physicsnemo_curator.etl.data_transformations import DataTransformation
-from physicsnemo_curator.etl.processing_config import ProcessingConfig
-
-from .constants import PhysicsConstants
-from .external_aero_utils import (
-    to_float32,
-)
-from .schemas import (
+from numcodecs import Blosc
+from schemas import (
     ExternalAerodynamicsExtractedDataInMemory,
     ExternalAerodynamicsNumpyDataInMemory,
     ExternalAerodynamicsNumpyMetadata,
     ExternalAerodynamicsZarrDataInMemory,
     PreparedZarrArrayInfo,
 )
+
+from physicsnemo_curator.etl.data_transformations import DataTransformation
+from physicsnemo_curator.etl.processing_config import ProcessingConfig
 
 
 class ExternalAerodynamicsNumpyTransformation(DataTransformation):

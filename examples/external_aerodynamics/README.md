@@ -60,8 +60,7 @@ while the full version contain 500 runs.
 Example of the command line that launches Curator configured for DrivAerML dataset:
 
 ```bash
-export PYTHONPATH=$PYTHONPATH:examples &&
-physicsnemo-curator-etl                         \
+python run_etl.py                                      \
     --config-dir=examples/external_aerodynamics/config \
     --config-name=external_aero_etl_drivaerml   \
     etl.source.input_dir=/data/drivaerml/       \
@@ -72,8 +71,7 @@ physicsnemo-curator-etl                         \
 To run on AhmedML dataset:
 
 ```bash
-export PYTHONPATH=$PYTHONPATH:examples &&
-physicsnemo-curator-etl                     \
+python run_etl.py                                      \
     --config-dir=examples/external_aerodynamics/config \
     --config-name=external_aero_etl_ahmedml \
     etl.source.input_dir=/data/ahmedml/     \
@@ -263,8 +261,7 @@ volume_preprocessing:
 To use the filtering configuration:
 
 ```bash
-export PYTHONPATH=$PYTHONPATH:examples &&
-physicsnemo-curator-etl                                  \
+python run_etl.py                                        \
     --config-dir=examples/external_aerodynamics/config   \
     --config-name=external_aero_etl_drivaerml_filtering  \
     etl.source.input_dir=/data/drivaerml/                \
